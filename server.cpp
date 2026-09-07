@@ -9,6 +9,10 @@
 #include <system_error>
 #include <unistd.h>
 
+static void throwsyserror(const char *msg) {
+  throw std::system_error(errno, std::system_category(), msg);
+}
+
 static void msg(const char *msg) { fprintf(stderr, "%s\n", msg); }
 
 static void do_something(int connfd) {
@@ -29,7 +33,7 @@ int main() {
   int fd = socket(AF_INET, SOCK_STREAM, 0);
 
   if (fd < 0) {
-    throw std::system_error(errno, std::system_category(), "socket() failed");
+    throwsyserror("socket() failed");
   }
 
   int value = 1;
@@ -43,13 +47,13 @@ int main() {
   int rv = bind(fd, (const struct sockaddr *)&addr, sizeof(addr));
 
   if (rv) {
-    throw std::system_error(errno, std::system_category(), "bind() failed");
+    throwsyserror("bind() failed");
   }
 
   rv = listen(fd, SOMAXCONN);
 
   if (rv) {
-    throw std::system_error(errno, std::system_category(), "listen() failed");
+    throwsyserror("listen() failed");
   }
 
   while (true) {
