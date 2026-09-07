@@ -1,5 +1,6 @@
 #include <arpa/inet.h>
 #include <assert.h>
+#include <cstdint>
 #include <errno.h>
 #include <netinet/ip.h>
 #include <stdint.h>
@@ -7,8 +8,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/types.h>
 #include <system_error>
 #include <unistd.h>
+
+const size_t k_max_msg = 4096;
 
 static void throwsyserror(const char *msg) {
   throw std::system_error(errno, std::system_category(), msg);
@@ -29,7 +33,7 @@ static void do_something(int connfd) {
   write(connfd, wbuf, strlen(wbuf));
 }
 
-static int32_t write_all(int fd, const char *buf, size_t count) {
+static int32_t write_full(int fd, const char *buf, size_t count) {
   while (count > 0) {
     ssize_t n = write(fd, buf, count);
     if (n < 0) {
@@ -44,7 +48,7 @@ static int32_t write_all(int fd, const char *buf, size_t count) {
   return 0;
 }
 
-static int32_t read_all(int fd, char *rbuf, size_t count) {
+static int32_t read_full(int fd, char *rbuf, size_t count) {
   while (count > 0) {
     ssize_t n = read(fd, rbuf, count);
     if (n <= 0) {
@@ -59,6 +63,43 @@ static int32_t read_all(int fd, char *rbuf, size_t count) {
   }
 
   return 0;
+}
+
+static int32_t one_request(int connfd) {
+
+  char rbuf[4 + k_max_msg] = {};
+  errno = 0;
+  int32_t err = read_full(connfd, rbuf, 4);
+  if (err) {
+    msg("read() error");
+    return -1;
+  }
+
+  uint32_t len = 0;
+
+  memcpy(&len, rbuf, sizeof(len));
+
+  if (len > k_max_msg) {
+    msg("message too long");
+    return -1;
+  }
+
+  err = read_full(connfd, rbuf + 4, len);
+  if (err) {
+    msg("read() error");
+    return -1;
+  }
+
+  printf("client says: %.*s\n", len, rbuf + 4);
+
+  const char reply[] = "world";
+  char wbuf[4 + sizeof(reply)] = {};
+  uint32_t reply_len = (uint32_t)strlen(reply);
+
+  memcpy(&reply_len, wbuf, 4);
+  memcpy(wbuf + 4, reply, reply_len);
+
+  return write_full(connfd, wbuf, 4 + reply_len);
 }
 
 int main() {
