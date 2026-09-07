@@ -1,4 +1,5 @@
 #include <arpa/inet.h>
+#include <assert.h>
 #include <errno.h>
 #include <netinet/ip.h>
 #include <stdint.h>
@@ -26,6 +27,38 @@ static void do_something(int connfd) {
 
   char wbuf[] = "world";
   write(connfd, wbuf, strlen(wbuf));
+}
+
+static int32_t write_all(int fd, const char *buf, size_t count) {
+  while (count > 0) {
+    ssize_t n = write(fd, buf, count);
+    if (n < 0) {
+      return -1;
+    }
+
+    assert((ssize_t)n <= count);
+
+    count -= (size_t)n;
+    buf += n;
+  }
+  return 0;
+}
+
+static int32_t read_all(int fd, char *rbuf, size_t count) {
+  while (count > 0) {
+    ssize_t n = read(fd, rbuf, count);
+    if (n <= 0) {
+      return -1;
+    }
+
+    assert(ssize_t(n) <= count);
+
+    count -= size_t(n);
+
+    rbuf += n;
+  }
+
+  return 0;
 }
 
 int main() {
@@ -65,7 +98,13 @@ int main() {
       continue;
     }
 
-    do_something(connfd);
+    while (true) {
+      int32_t err = one_request(connfd);
+
+      if (err < 0) {
+        break;
+      }
+    }
     close(connfd);
   }
 }
