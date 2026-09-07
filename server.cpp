@@ -96,7 +96,7 @@ static int32_t one_request(int connfd) {
   char wbuf[4 + sizeof(reply)] = {};
   uint32_t reply_len = (uint32_t)strlen(reply);
 
-  memcpy(&reply_len, wbuf, 4);
+  memcpy(wbuf, &reply_len, 4);
   memcpy(wbuf + 4, reply, reply_len);
 
   return write_full(connfd, wbuf, 4 + reply_len);
