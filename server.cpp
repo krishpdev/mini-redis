@@ -118,6 +118,11 @@ struct Connection {
   std::vector<uint8_t> write_buffer;
 };
 
+struct Pollfd {
+  int fd;
+  short events;
+  short revents;
+};
 int main() {
 
   int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -145,6 +150,8 @@ int main() {
   if (rv) {
     throwsyserror("listen() failed");
   }
+
+  std::vector<Connection> fd_connections;
 
   while (true) {
     struct sockaddr_in client_addr = {};
