@@ -11,6 +11,7 @@
 #include <sys/types.h>
 #include <system_error>
 #include <unistd.h>
+#include <vector>
 
 const size_t k_max_msg = 4096;
 
@@ -71,7 +72,11 @@ static int32_t one_request(int connfd) {
   errno = 0;
   int32_t err = read_full(connfd, rbuf, 4);
   if (err) {
-    msg("read() error");
+    if (errno == 0) {
+      msg("EOF");
+    } else {
+      msg("read() error");
+    }
     return -1;
   }
 
@@ -101,6 +106,17 @@ static int32_t one_request(int connfd) {
 
   return write_full(connfd, wbuf, 4 + reply_len);
 }
+
+struct Connection {
+  int fd = 1;
+
+  bool want_read = false;
+  bool want_write = false;
+  bool want_close = false;
+
+  std::vector<uint8_t> read_buffer;
+  std::vector<uint8_t> write_buffer;
+};
 
 int main() {
 
@@ -135,17 +151,9 @@ int main() {
     socklen_t addrlen = sizeof(client_addr);
     int connfd = accept(fd, (struct sockaddr *)&client_addr, &addrlen);
 
-    if (connfd < 0) {
-      continue;
-    }
+    fd_set want_read;
+    fd_set want_write;
 
-    while (true) {
-      int32_t err = one_request(connfd);
-
-      if (err < 0) {
-        break;
-      }
-    }
-    close(connfd);
+    can_read, can_write = wait_for_io(connfd, &want_read, &want_write);
   }
 }
