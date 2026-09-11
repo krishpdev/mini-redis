@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <errno.h>
 #include <netinet/ip.h>
+#include <poll.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -118,13 +119,7 @@ struct Connection {
   std::vector<uint8_t> write_buffer;
 };
 
-struct Pollfd {
-  int fd;
-  short events;
-  short revents;
-};
 int main() {
-
   int fd = socket(AF_INET, SOCK_STREAM, 0);
 
   if (fd < 0) {
@@ -151,16 +146,53 @@ int main() {
     throwsyserror("listen() failed");
   }
 
-  std::vector<Connection> fd_connections;
+  std::vector<Connection *> fd_connections;
+
+  std::vector<struct pollfd> pollfds;
 
   while (true) {
-    struct sockaddr_in client_addr = {};
-    socklen_t addrlen = sizeof(client_addr);
-    int connfd = accept(fd, (struct sockaddr *)&client_addr, &addrlen);
 
-    fd_set want_read;
-    fd_set want_write;
+    pollfds.clear();
 
-    can_read, can_write = wait_for_io(connfd, &want_read, &want_write);
+    struct pollfd pfd = {fd, POLLIN, 0};
+
+    pollfds.push_back(pfd);
+
+    for (Connection *connection : fd_connections) {
+      if (!connection) {
+        continue;
+      }
+
+      struct pollfd pfd = {connection->fd, POLLERR, 0};
+
+      if (connection->want_read) {
+        pfd.events |= POLLIN;
+      }
+
+      if (connection->want_write) {
+        pfd.events |= POLLOUT;
+      }
+
+      pollfds.push_back(pfd);
+    }
+
+    int rv = poll(pollfds.data(), pollfds.size(), -1);
+
+    if (rv < 0) {
+      if (errno == EINTR) {
+        continue;
+      } else {
+        throwsyserror("poll() failed");
+      }
+    }
   }
+  //    struct sockaddr_in client_addr = {};
+  //    socklen_t addrlen = sizeof(client_addr);
+  //    int connfd = accept(fd, (struct sockaddr *)&client_addr, &addrlen);
+  //
+  //    fd_set want_read;
+  //    fd_set want_write;
+  //
+  //    can_read, can_write = wait_for_io(connfd, &want_read, &want_write);
+}
 }
