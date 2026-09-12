@@ -112,6 +112,15 @@ int main() {
         throwsyserror("poll() failed");
       }
     }
+
+    if (pollfds[0].revents) {
+      if (Connection *connection = handle_accept(fd)) {
+        if (fd_connections.size() <= (size_t)connection->fd) {
+          fd_connections.resize(connection->fd + 1);
+        }
+        fd_connections[connection->fd] = connection;
+      }
+    }
   }
   //    struct sockaddr_in client_addr = {};
   //    socklen_t addrlen = sizeof(client_addr);
@@ -121,5 +130,4 @@ int main() {
   //    fd_set want_write;
   //
   //    can_read, can_write = wait_for_io(connfd, &want_read, &want_write);
-}
 }
