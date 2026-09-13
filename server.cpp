@@ -70,7 +70,7 @@ static bool try_one_request(Connection *connection) {
 
   uint32_t len = 0;
 
-  mempcpy(&len, connection->read_buffer.data(), 4);
+  memcpy(&len, connection->read_buffer.data(), 4);
 
   if (len > k_max_msg) {
     connection->want_close = true;
@@ -82,6 +82,8 @@ static bool try_one_request(Connection *connection) {
   }
 
   const uint8_t *request = connection->read_buffer.data() + 4;
+
+  fprintf(stderr, "client says: %.*s\n", (int)len, (const char *)request);
 
   buffer_insert(connection->write_buffer, (const uint8_t *)&len, 4);
   buffer_insert(connection->write_buffer, request, len);
@@ -147,8 +149,6 @@ static void handle_read(Connection *connection) {
     connection->want_close = true; // client closed EOF
     return;
   }
-
-  fprintf(stderr, "client says: %.*s\n", (int)n, buf);
 
   buffer_insert(connection->read_buffer, buf, (size_t)n);
 
