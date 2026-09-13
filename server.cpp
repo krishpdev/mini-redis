@@ -110,12 +110,41 @@ static Connection *handle_accept(int fd) {
   return connection;
 }
 
+static void handle_write(Connection *connection) {
+  assert(connection->write_buffer.size() > 0);
+
+  ssize_t rv = write(connection->fd, connection->write_buffer.data(),
+                     connection->write_buffer.size());
+
+  if (rv < 0) {
+    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+      return;
+    }
+    connection->want_close = true;
+    return;
+  }
+
+  buffer_erase(connection->write_buffer, 0, (size_t)rv);
+
+  if (connection->write_buffer.size() == 0) {
+    connection->want_write = false;
+    connection->want_read = true;
+  }
+}
+
 static void handle_read(Connection *connection) {
-  char buf[1024] = {};
+  uint8_t buf[1024 * 64] = {};
   ssize_t n = read(connection->fd, buf, sizeof(buf));
 
-  if (n <= 0) {
+  if (n < 0) {
+    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+      return; // not ready yet, try again later
+    }
     connection->want_close = true;
+    return;
+  }
+  if (n == 0) {
+    connection->want_close = true; // client closed EOF
     return;
   }
 
@@ -123,7 +152,13 @@ static void handle_read(Connection *connection) {
 
   buffer_insert(connection->read_buffer, buf, (size_t)n);
 
-  try_one_request(connection);
+  while (try_one_request(connection)) {}
+
+  if (connection->write_buffer.size() > 0) {
+    connection->want_write = true;
+    connection->want_read = false;
+    return handle_write(connection);
+  }
 }
 
 int main() {
@@ -132,6 +167,8 @@ int main() {
   if (fd < 0) {
     throwsyserror("socket() failed");
   }
+
+  fd_set_nb(fd);
 
   int value = 1;
   setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &value, sizeof(value));
@@ -206,16 +243,19 @@ int main() {
       uint32_t ready = pollfds[i].revents;
 
       Connection *connection = fd_connections[pollfds[i].fd];
+      if (!connection) {
+        continue;
+      }
 
       if (ready & POLLIN) {
         handle_read(connection);
       }
 
-      if (ready & POLLOUT) {
+      if ((ready & POLLOUT) && connection->want_write) {
         handle_write(connection);
       }
 
-      if (ready & POLLERR || connection->want_close) {
+      if ((ready & POLLERR) || connection->want_close) {
         (void)close(connection->fd);
         fd_connections[connection->fd] = nullptr;
         delete connection;
