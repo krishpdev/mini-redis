@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <errno.h>
 #include <fcntl.h>
+#include <map>
 #include <netinet/ip.h>
 #include <poll.h>
 #include <stdint.h>
@@ -62,6 +63,127 @@ static void buffer_erase(std::vector<uint8_t> &buffer, size_t offset,
   buffer.erase(buffer.begin() + offset, buffer.begin() + offset + len);
 }
 
+struct Response {
+  uint32_t status = 0;
+  std::vector<uint8_t> payload;
+};
+
+static std::map<std::string, std::string> g_data;
+
+static void do_request(std::vector<std::string> &cmd, Response &resp) {
+  if (cmd.size() < 1) {
+    resp.status = 1;
+    return;
+  }
+
+  const std::string &op = cmd[0];
+
+  if (op == "get") {
+    if (cmd.size() != 2) {
+      resp.status = 1;
+      return;
+    }
+
+    const std::string &key = cmd[1];
+
+    auto it = g_data.find(key);
+    if (it == g_data.end()) {
+      resp.status = 2;
+      return;
+    }
+
+    const std::string &value = it->second;
+
+    resp.status = 0;
+    resp.payload.assign(value.begin(), value.end());
+    return;
+
+  } else if (op == "set") {
+    if (cmd.size() != 3) {
+      resp.status = 1;
+      return;
+    }
+
+    const std::string &key = cmd[1];
+    const std::string &value = cmd[2];
+
+    g_data[key] = value;
+
+    resp.status = 0;
+    return;
+  } else if (op == "del") {
+    if (cmd.size() != 2) {
+      resp.status = 1;
+      return;
+    }
+    g_data.erase(cmd[1]);
+  } else {
+    resp.status = 1;
+    return;
+  }
+}
+
+static void make_response(const Response &resp, std::vector<uint8_t> &out) {
+  uint32_t len = 4 + (uint32_t)resp.payload.size();
+
+  buffer_insert(out, (const uint8_t *)&len, sizeof(len));
+  buffer_insert(out, (const uint8_t *)&resp.status, sizeof(resp.status));
+  buffer_insert(out, resp.payload.data(), resp.payload.size());
+}
+
+static bool read_u32(const uint8_t *&data, const uint8_t *end, uint32_t &out) {
+  if (data + 4 > end) {
+    return false;
+  }
+
+  memcpy(&out, data, sizeof(out));
+  data += 4;
+  return true;
+}
+
+static bool read_str(const uint8_t *&data, const uint8_t *end, size_t len,
+                     std::string &out) {
+  if (data + len > end) {
+    return false;
+  }
+
+  out.assign(data, data + len);
+  data += len;
+  return true;
+}
+
+static int32_t parse_req(const uint8_t *data, size_t len,
+                         std::vector<std::string> &out) {
+  const uint8_t *end = data + len;
+  uint32_t nstr = 0;
+
+  if (!read_u32(data, end, nstr)) {
+    return -1;
+  }
+
+  if (nstr > k_max_msg) {
+    return -1;
+  }
+
+  while (out.size() < nstr) {
+    uint32_t slen = 0;
+    if (!read_u32(data, end, slen)) {
+      return -1;
+    }
+
+    out.push_back(std::string());
+
+    if (!read_str(data, end, len, out.back())) {
+      return -1;
+    }
+  }
+
+  if (data != end) {
+    return -1;
+  }
+
+  return 0;
+}
 static bool try_one_request(Connection *connection) {
 
   if (connection->read_buffer.size() < 4) {
@@ -83,7 +205,16 @@ static bool try_one_request(Connection *connection) {
 
   const uint8_t *request = connection->read_buffer.data() + 4;
 
-  fprintf(stderr, "client says: %.*s\n", (int)len, (const char *)request);
+  std::vector<std::string> cmd;
+
+  if (parse_req(request, len, cmd) < 0) {
+    connection->want_close = true;
+    return false;
+  }
+
+  Response resp;
+  do_request(cmd, resp);
+  make_response(resp, connection->write_buffer);
 
   buffer_insert(connection->write_buffer, (const uint8_t *)&len, 4);
   buffer_insert(connection->write_buffer, request, len);
@@ -152,7 +283,8 @@ static void handle_read(Connection *connection) {
 
   buffer_insert(connection->read_buffer, buf, (size_t)n);
 
-  while (try_one_request(connection)) {}
+  while (try_one_request(connection)) {
+  }
 
   if (connection->write_buffer.size() > 0) {
     connection->want_write = true;
