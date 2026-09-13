@@ -19,6 +19,32 @@
 
 const size_t k_max_msg = 4096;
 
+// =============================================================================
+// Data Structures & Global State
+// =============================================================================
+
+struct Connection {
+  int fd = 1;
+
+  bool want_read = false;
+  bool want_write = false;
+  bool want_close = false;
+
+  std::vector<uint8_t> read_buffer;
+  std::vector<uint8_t> write_buffer;
+};
+
+struct Response {
+  uint32_t status = 0;
+  std::vector<uint8_t> payload;
+};
+
+static std::map<std::string, std::string> g_data;
+
+// =============================================================================
+// Utilities & Helpers
+// =============================================================================
+
 static void throwsyserror(const char *msg) {
   throw std::system_error(errno, std::system_category(), msg);
 }
@@ -38,17 +64,6 @@ static void do_something(int connfd) {
   write(connfd, wbuf, strlen(wbuf));
 }
 
-struct Connection {
-  int fd = 1;
-
-  bool want_read = false;
-  bool want_write = false;
-  bool want_close = false;
-
-  std::vector<uint8_t> read_buffer;
-  std::vector<uint8_t> write_buffer;
-};
-
 static void fd_set_nb(int fd) {
   fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
 }
@@ -63,12 +78,63 @@ static void buffer_erase(std::vector<uint8_t> &buffer, size_t offset,
   buffer.erase(buffer.begin() + offset, buffer.begin() + offset + len);
 }
 
-struct Response {
-  uint32_t status = 0;
-  std::vector<uint8_t> payload;
-};
+// =============================================================================
+// Protocol Parsing & Request Handling
+// =============================================================================
 
-static std::map<std::string, std::string> g_data;
+static bool read_u32(const uint8_t *&data, const uint8_t *end, uint32_t &out) {
+  if (data + 4 > end) {
+    return false;
+  }
+
+  memcpy(&out, data, sizeof(out));
+  data += 4;
+  return true;
+}
+
+static bool read_str(const uint8_t *&data, const uint8_t *end, size_t len,
+                     std::string &out) {
+  if (data + len > end) {
+    return false;
+  }
+
+  out.assign(data, data + len);
+  data += len;
+  return true;
+}
+
+static int32_t parse_req(const uint8_t *data, size_t len,
+                         std::vector<std::string> &out) {
+  const uint8_t *end = data + len;
+  uint32_t nstr = 0;
+
+  if (!read_u32(data, end, nstr)) {
+    return -1;
+  }
+
+  if (nstr > k_max_msg) {
+    return -1;
+  }
+
+  while (out.size() < nstr) {
+    uint32_t slen = 0;
+    if (!read_u32(data, end, slen)) {
+      return -1;
+    }
+
+    out.push_back(std::string());
+
+    if (!read_str(data, end, len, out.back())) {
+      return -1;
+    }
+  }
+
+  if (data != end) {
+    return -1;
+  }
+
+  return 0;
+}
 
 static void do_request(std::vector<std::string> &cmd, Response &resp) {
   if (cmd.size() < 1) {
@@ -131,61 +197,7 @@ static void make_response(const Response &resp, std::vector<uint8_t> &out) {
   buffer_insert(out, resp.payload.data(), resp.payload.size());
 }
 
-static bool read_u32(const uint8_t *&data, const uint8_t *end, uint32_t &out) {
-  if (data + 4 > end) {
-    return false;
-  }
-
-  memcpy(&out, data, sizeof(out));
-  data += 4;
-  return true;
-}
-
-static bool read_str(const uint8_t *&data, const uint8_t *end, size_t len,
-                     std::string &out) {
-  if (data + len > end) {
-    return false;
-  }
-
-  out.assign(data, data + len);
-  data += len;
-  return true;
-}
-
-static int32_t parse_req(const uint8_t *data, size_t len,
-                         std::vector<std::string> &out) {
-  const uint8_t *end = data + len;
-  uint32_t nstr = 0;
-
-  if (!read_u32(data, end, nstr)) {
-    return -1;
-  }
-
-  if (nstr > k_max_msg) {
-    return -1;
-  }
-
-  while (out.size() < nstr) {
-    uint32_t slen = 0;
-    if (!read_u32(data, end, slen)) {
-      return -1;
-    }
-
-    out.push_back(std::string());
-
-    if (!read_str(data, end, len, out.back())) {
-      return -1;
-    }
-  }
-
-  if (data != end) {
-    return -1;
-  }
-
-  return 0;
-}
 static bool try_one_request(Connection *connection) {
-
   if (connection->read_buffer.size() < 4) {
     return false;
   }
@@ -223,6 +235,10 @@ static bool try_one_request(Connection *connection) {
 
   return true;
 }
+
+// =============================================================================
+// Connection & I/O Handlers
+// =============================================================================
 
 static Connection *handle_accept(int fd) {
   struct sockaddr_in client_addr = {};
@@ -293,6 +309,10 @@ static void handle_read(Connection *connection) {
   }
 }
 
+// =============================================================================
+// Main Event Loop
+// =============================================================================
+
 int main() {
   int fd = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -323,15 +343,12 @@ int main() {
   }
 
   std::vector<Connection *> fd_connections;
-
   std::vector<struct pollfd> pollfds;
 
   while (true) {
-
     pollfds.clear();
 
     struct pollfd pfd = {fd, POLLIN, 0};
-
     pollfds.push_back(pfd);
 
     for (Connection *connection : fd_connections) {
